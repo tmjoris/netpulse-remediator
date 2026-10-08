@@ -42,6 +42,12 @@ The server stores recent incidents in a process-local list. Therefore:
 - the audit file is the only durable output in the current implementation;
 - the default audit path is `runtime/netpulse.audit.jsonl`.
 
+The current implementation does not deduplicate incident responses. Once a
+window is full, every degraded sample produces an incident evaluation; the
+cooldown suppresses the proposed action, not the incident record. A production
+controller would normally add a durable incident key and explicit lifecycle
+states such as open, acknowledged, resolved, and suppressed.
+
 This is appropriate for a small lab, not for a highly available production
 controller. A production implementation would need durable state, identity,
 authorization, bounded retention, and coordinated workers.
@@ -68,4 +74,3 @@ measurements. It does not model topology, correlated failures, device
 maintenance, or traffic demand. It is a transparent starting point for
 experimentation, not a claim that five samples and fixed thresholds are
 universally correct.
-

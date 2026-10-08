@@ -83,8 +83,8 @@ pip install -e .
 netpulse demo --samples 8
 ```
 
-The demo uses generated sample data and prints the resulting plans. It does
-not send HTTP requests.
+The demo uses generated sample data and prints the resulting plans. It is
+reproducible by default (`--seed 7`), but it does not send HTTP requests.
 
 To run the HTTP service:
 
@@ -102,8 +102,9 @@ curl http://127.0.0.1:8000/metrics
 ```
 
 The example sender posts six degraded samples. The first five fill the
-sliding window; subsequent requests produce incidents. The response includes
-the incident and the dry-run plan.
+sliding window; each subsequent degraded evaluation produces an incident
+evaluation, while the cooldown changes the action to `noop` after the first
+plan. The response includes the incident and the dry-run plan.
 
 ## Run the local Prometheus stack
 
