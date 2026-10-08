@@ -36,3 +36,6 @@ def main() -> None:
     if args.command == "demo":
         demo(args.samples)
 
+
+if __name__ == "__main__":
+    main()

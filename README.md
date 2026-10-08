@@ -25,8 +25,8 @@ pytest
 ```
 
 The demo simulates a degraded uplink, detects the incident, and prints the
-remediation plan without changing a real device. Run `netpulse --help` for the
-HTTP server and JSONL ingestion commands.
+remediation plan without changing a real device. Run `netpulse --help` to see
+the available commands.
 
 ## Design notes
 
@@ -35,4 +35,3 @@ NetPulse intentionally separates **observation**, **decision**, and
 device-specific authentication, approval, and rollback controls. This makes
 the safety boundary visible instead of hiding network changes behind a
 generic "fix" function.
-
