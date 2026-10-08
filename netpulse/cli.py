@@ -32,9 +32,15 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
     demo_parser = subparsers.add_parser("demo", help="run a deterministic degraded-link simulation")
     demo_parser.add_argument("--samples", type=int, default=12)
+    serve_parser = subparsers.add_parser("serve", help="run the telemetry and incident API")
+    serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
     if args.command == "demo":
         demo(args.samples)
+    elif args.command == "serve":
+        import uvicorn
+        uvicorn.run("netpulse.server:app", host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

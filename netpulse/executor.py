@@ -8,7 +8,7 @@ from .models import Action, Incident
 class DryRunExecutor:
     """Record the change that would happen, without touching a network device."""
 
-    def __init__(self, audit_path: str | Path = "netpulse.audit.jsonl") -> None:
+    def __init__(self, audit_path: str | Path = "runtime/netpulse.audit.jsonl") -> None:
         self.audit_path = Path(audit_path)
 
     def execute(self, incident: Incident) -> dict[str, str]:
@@ -33,4 +33,3 @@ class DryRunExecutor:
             Action.SHIFT_TRAFFIC: "Would drain traffic to a healthy path",
             Action.DISABLE_INTERFACE: "Would isolate the interface pending investigation",
         }[action]
-
