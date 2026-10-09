@@ -1,0 +1,50 @@
+# NetPulse policy and topology.
+# Validate with: netpulse check-config config/netpulse.example.toml
+# Secrets (the API token) belong in the environment: NETPULSE_API_TOKEN.
+
+[executor]
+# "dry_run": shadow mode, records what would change and tracks the would-be
+#            state so every safety check behaves as in production.
+# "lab":     simulated devices (used by `netpulse simulate`).
+mode = "dry_run"
+
+[audit]
+path = "runtime/netpulse.audit.jsonl"
+
+[detection]
+window = 5                  # samples kept per interface
+breach_count = 4            # M-of-N: samples that must breach to raise or clear
+latency_warning_ms = 100.0
+loss_warning_pct = 2.0
+loss_critical_pct = 10.0    # critical incidents trigger an automated drain
+latency_clear_ms = 80.0     # hysteresis: clear thresholds sit below raise thresholds
+loss_clear_pct = 0.5
+
+[safety]
+automation_enabled = true
+max_concurrent_drains = 2             # fleet-wide blast-radius limit for automation
+max_post_drain_utilization_pct = 80.0 # survivors must stay below this after a drain
+min_active_members = 1
+action_cooldown_s = 600               # between automated actions on one interface
+undrain_soak_s = 900                  # continuous health required before undrain
+flap_max_drains = 3                   # automated drains per window before holding drained
+flap_window_s = 86400
+utilization_max_age_s = 300           # older utilization counts as unknown (fail closed)
+
+# Parallel links that can carry each other's traffic (LAG members, ECMP paths).
+# Interfaces outside every group are never drained by automation.
+[[link_groups]]
+name = "dub-lon-bundle"
+members = [
+  { device = "edge-dub-01", interface = "et-0/0/0", capacity_gbps = 100 },
+  { device = "edge-dub-01", interface = "et-0/0/1", capacity_gbps = 100 },
+  { device = "edge-dub-01", interface = "et-0/0/2", capacity_gbps = 100 },
+  { device = "edge-dub-01", interface = "et-0/0/3", capacity_gbps = 100 },
+]
+
+[[link_groups]]
+name = "dub-ams-ecmp"
+members = [
+  { device = "edge-dub-02", interface = "et-0/0/0", capacity_gbps = 100 },
+  { device = "edge-dub-02", interface = "et-0/0/1", capacity_gbps = 100 },
+]

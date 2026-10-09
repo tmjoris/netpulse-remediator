@@ -1,0 +1,68 @@
+# Each alert links to its section in docs/RUNBOOK.md.
+groups:
+  - name: netpulse.service
+    rules:
+      - alert: NetPulseDown
+        expr: up{job="netpulse"} == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: NetPulse is not being scraped; automated remediation is not running.
+          runbook: docs/RUNBOOK.md#netpulsedown
+
+      - alert: NetPulseTelemetryStale
+        expr: time() - max by (device, interface) (netpulse_interface_last_sample_timestamp_seconds) > 300
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "No telemetry from {{ $labels.device }}:{{ $labels.interface }} for 5m; NetPulse is blind there."
+          runbook: docs/RUNBOOK.md#netpulsetelemetrystale
+
+      - alert: NetPulseSlowEvaluation
+        expr: histogram_quantile(0.99, sum by (le) (rate(netpulse_evaluation_duration_seconds_bucket[5m]))) > 0.1
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: p99 sample evaluation above 100ms; ingestion may fall behind.
+          runbook: docs/RUNBOOK.md#netpulseslowevaluation
+
+  - name: netpulse.remediation
+    rules:
+      - alert: NetPulseAutomationDisabled
+        expr: netpulse_automation_enabled == 0
+        for: 30m
+        labels: {severity: ticket}
+        annotations:
+          summary: Automated remediation has been disabled for 30m. Is that still intended?
+          runbook: docs/RUNBOOK.md#netpulseautomationdisabled
+
+      - alert: NetPulseIncidentEscalated
+        expr: sum(netpulse_open_incidents{state="escalated"}) > 0
+        for: 1m
+        labels: {severity: page}
+        annotations:
+          summary: A critical link problem needs a human; automation refused or failed to drain it.
+          runbook: docs/RUNBOOK.md#netpulseincidentescalated
+
+      - alert: NetPulseChangeFailed
+        expr: increase(netpulse_changes_total{status=~"failed|rolled_back"}[15m]) > 0
+        labels: {severity: page}
+        annotations:
+          summary: "A {{ $labels.action }} change failed or was rolled back."
+          runbook: docs/RUNBOOK.md#netpulsechangefailed
+
+      - alert: NetPulseDrainHeld
+        expr: netpulse_drains_held > 0
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: A drained link will not be undrained automatically (flap damping or guard).
+          runbook: docs/RUNBOOK.md#netpulsedrainheld
+
+      - alert: NetPulseFleetDrainLimit
+        expr: sum(netpulse_drained_interfaces{owner="automation"}) >= 2
+        for: 15m
+        labels: {severity: ticket}
+        annotations:
+          summary: Automation is at its concurrent-drain limit; further failures will escalate.
+          runbook: docs/RUNBOOK.md#netpulsefleetdrainlimit
