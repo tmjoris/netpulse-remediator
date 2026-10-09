@@ -3,16 +3,20 @@
 The engine only talks to the ``Executor`` protocol. A production adapter would
 implement it with NETCONF/gNMI/vendor APIs (for example by raising the IGP
 metric or shutting the BGP session on the member before disabling it) and
-report the device's real drain state from ``drained()``. This repository
-ships no such adapter on purpose: nothing here can change a real device.
+report the device's real drain state from ``drained()``. ``frr.FrrExecutor``
+is such an adapter for FRRouting, exercised against real FRR routers in the
+containerised lab under ``lab/frr``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from .models import Action, ChangeStatus, InterfaceRef
+
+if TYPE_CHECKING:
+    from .config import Settings
 
 
 class ExecutionError(RuntimeError):
@@ -92,9 +96,26 @@ class LabExecutor(DryRunExecutor):
         return True
 
 
-def build_executor(mode: str, initially_drained: Iterable[InterfaceRef] = ()) -> Executor:
+def build_executor(settings: Settings, initially_drained: Iterable[InterfaceRef] = ()) -> Executor:
+    """Executor for ``settings.executor``.
+
+    ``initially_drained`` seeds the simulated executors from the audit log; the
+    FRR executor ignores it because the devices themselves are the truth.
+    """
+    mode = settings.executor
     if mode == "dry_run":
         return DryRunExecutor(initially_drained)
     if mode == "lab":
         return LabExecutor(initially_drained)
+    if mode == "frr":
+        from .devices import SubprocessTransport
+        from .frr import FrrExecutor
+
+        managed = [
+            m.ref
+            for group in settings.topology.groups
+            for m in group.members
+            if m.ref.device in settings.devices.hosts
+        ]
+        return FrrExecutor(SubprocessTransport(settings.devices), managed, settings.frr)
     raise ValueError(f"unknown executor mode {mode!r}")

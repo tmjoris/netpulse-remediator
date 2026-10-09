@@ -40,11 +40,31 @@ and making every decision explainable after the fact.
 | **Audit & state** | Append-only JSONL with a SHA-256 hash chain (tampering is detectable with `netpulse audit verify`). On restart the log is replayed so the kill switch, maintenance windows, drain ownership and flap history survive, then reconciled against what the executor reports. |
 | **Operations** | Versioned HTTP API with bearer-token auth on writes, liveness/readiness probes, Prometheus metrics, 8 alert rules each linked to a [runbook](docs/RUNBOOK.md) section, and a provisioned Grafana dashboard. |
 
-There is **no live device adapter** in this repository, by design. The
-`dry_run` executor runs in shadow mode: it records what it *would* do and
-tracks the would-be state, so every safety check behaves exactly as it would in
-production. See [Architecture → Executors](docs/ARCHITECTURE.md#executors) for
-what a real adapter would need.
+Three executors:
+
+| Mode | What it does |
+|---|---|
+| `frr` | **Changes real routers.** Drains by OSPF cost-out on both ends of the link through `vtysh` (over `docker exec` or SSH), then waits until the device's routing table stops using the interface, or reverts. Exercised against real FRRouting routers in the [FRR lab](lab/frr/README.md). |
+| `dry_run` | Shadow mode (default): records what it *would* do and tracks the would-be state, so every safety check behaves as in production. |
+| `lab` | Simulated devices with fault injection, for the scenario lab. |
+
+### Real routers: the FRR lab
+
+`lab/frr/demo.sh` starts two FRRouting routers with two parallel OSPF links
+(ECMP), injects 30% packet loss on one link with `tc netem`, and lets NetPulse
+find it from live `ping` probes and drain it. The kernel routing table moves
+all traffic to the other link; after repair and the soak period, NetPulse
+undrains it and ECMP comes back. It runs in CI.
+
+```text
+r1 -> r2 loopback (before):      nexthop via 10.0.1.3 dev lnk1 / nexthop via 10.0.2.3 dev lnk2
+inject 30% loss on lnk1 ...
+r1 -> r2 loopback (drained):     via 10.0.2.3 dev lnk2          OSPF cost on lnk1: r1=65535 r2=65535
+repair lnk1, wait for soak ...
+r1 -> r2 loopback (undrained):   nexthop via 10.0.1.3 dev lnk1 / nexthop via 10.0.2.3 dev lnk2
+```
+
+See [`lab/frr/README.md`](lab/frr/README.md).
 
 ## Quick start
 
@@ -154,6 +174,10 @@ Unknown keys, wrong types and inconsistent thresholds are rejected at startup.
 | `netpulse/safety.py` | Safety checks and control state |
 | `netpulse/topology.py` | Link groups (redundancy model) |
 | `netpulse/executors.py` | `Executor` protocol, dry-run and lab executors |
+| `netpulse/frr.py` | FRR executor: OSPF cost-out drains verified against the RIB |
+| `netpulse/devices.py` | Device transports (`docker exec`, SSH) |
+| `netpulse/collector.py` | Active-probe telemetry collector (`netpulse collect`) |
+| `lab/frr/` | Two-router FRR/OSPF lab, config and end-to-end demo |
 | `netpulse/audit.py` | Hash-chained audit log and verification |
 | `netpulse/server.py` | FastAPI app |
 | `netpulse/metrics.py` | Prometheus instrumentation |
@@ -165,19 +189,20 @@ Unknown keys, wrong types and inconsistent thresholds are rejected at startup.
 
 ## Verification status
 
-Verified locally:
+Verified locally and in GitHub Actions:
 
-- `ruff`, `ruff format`, `mypy --strict`, and 76 tests with an 85% coverage gate (currently ~92%) on Python 3.12
+- `ruff`, `ruff format`, `mypy --strict`, and 101 tests with an 85% coverage gate (currently ~92%) on Python 3.11, 3.12 and 3.13
 - all five scenarios in-process, with outcomes asserted by tests
 - Docker image build; Compose stack startup with health checks
 - all scenarios driven over HTTP against the container; audit chain verified inside it
+- on real FRR routers: detection from live probes, drain (both link ends costed out, kernel routes moved), soak, undrain, ECMP restored; a drain made by hand outside NetPulse adopted as operator-owned on restart; a human request to drain the last remaining link refused
 - kill switch and held drains surviving a container restart
 - `promtool` validation of the Prometheus config and all 8 alert rules; every dashboard query evaluated against live Prometheus
 
 Not verified:
 
-- the GitHub Actions workflow itself (it mirrors the local steps but has not run on GitHub yet), including the Python 3.11 and 3.13 matrix legs
-- any real network device or vendor API (there is no live adapter)
+- vendor platforms (Junos, EOS, IOS-XR) or protocols other than OSPF; the FRR executor has only been run against FRR in containers
+- the SSH transport against a real host (the command it builds is unit-tested)
 - sustained high telemetry volume (single process, one lock; see the architecture doc)
 - high availability: one instance only, state on a local volume
 
@@ -185,9 +210,9 @@ Not verified:
 
 What this would need before touching a real network, roughly in order:
 
-1. A device adapter (gNMI/NETCONF or a vendor API) that drains by raising the IGP metric or shutting the BGP session first, and reports real drain state to `drained()`.
+1. Adapters for the production fleet's platforms (gNMI/NETCONF or vendor APIs), drains that also cover BGP (e.g. graceful shutdown), and changes executed asynchronously so a slow device never blocks ingestion.
 2. Topology from the network's source of truth (e.g. NetBox), including shared-risk link groups, rather than a static file.
 3. Durable shared state and leader election so two instances can't both act.
 4. Real identity: mTLS/OIDC with role-based permissions instead of a single bearer token.
-5. Streaming telemetry ingestion (gNMI subscriptions, sFlow, active probes) instead of HTTP push.
+5. Streaming telemetry (gNMI subscriptions, sFlow) alongside the active probes, at fleet scale.
 6. Cross-signal correlation, so a whole device or site failing is treated as one incident rather than N interface incidents.

@@ -1,0 +1,45 @@
+# NetPulse against the FRR lab: real OSPF, real cost-out drains, real probes.
+# Timers are shortened so the whole lifecycle fits in a couple of minutes.
+
+[executor]
+mode = "frr"
+
+[executor.frr]
+drain_cost = 65535
+normal_cost = 10              # matches "ip ospf cost 10" in r1.conf / r2.conf
+converge_timeout_s = 15
+peers = { "r1:lnk1" = "r2:lnk1", "r1:lnk2" = "r2:lnk2" }
+
+[devices]
+transport = "docker"          # "ssh" for real routers; hosts are then SSH hostnames
+command_timeout_s = 15
+
+[devices.hosts]
+r1 = "netpulse-lab-r1"
+r2 = "netpulse-lab-r2"
+
+[audit]
+path = "runtime/frr-lab.audit.jsonl"
+
+[safety]
+action_cooldown_s = 20
+undrain_soak_s = 20
+utilization_max_age_s = 60
+
+# Lab links are nominally 1 Gbps.
+[[link_groups]]
+name = "r1-r2"
+members = [
+  { device = "r1", interface = "lnk1", capacity_gbps = 1 },
+  { device = "r1", interface = "lnk2", capacity_gbps = 1 },
+]
+
+[[probes]]
+device = "r1"
+interface = "lnk1"
+target = "10.0.1.3"
+
+[[probes]]
+device = "r1"
+interface = "lnk2"
+target = "10.0.2.3"

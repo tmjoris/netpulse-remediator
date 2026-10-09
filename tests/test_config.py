@@ -70,3 +70,34 @@ def test_missing_and_malformed_files(tmp_path: Path) -> None:
     bad.write_text("[detection\n")
     with pytest.raises(ConfigError):
         load_settings(bad, env={})
+
+
+LAB = Path(__file__).parent.parent / "lab" / "frr" / "netpulse.toml"
+
+
+def test_frr_lab_config_loads() -> None:
+    from netpulse.models import InterfaceRef
+
+    settings = load_settings(LAB, env={})
+    assert settings.executor == "frr"
+    assert settings.devices.hosts == {"r1": "netpulse-lab-r1", "r2": "netpulse-lab-r2"}
+    assert settings.frr.peers[InterfaceRef("r1", "lnk1")] == InterfaceRef("r2", "lnk1")
+    assert [p.target for p in settings.probes] == ["10.0.1.3", "10.0.2.3"]
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        ({"executor": {"mode": "frr"}}, "needs \\[devices.hosts\\]"),
+        ({"executor": {"frr": {"drain_cost": 5}}}, "normal_cost < drain_cost"),
+        ({"executor": {"frr": {"peers": {"r1": "r2:x"}}}}, "executor.frr.peers"),
+        ({"executor": {"extra": 1}}, "unknown key\\(s\\) in executor"),
+        ({"devices": {"transport": "telnet"}}, "devices.transport"),
+        ({"devices": {"hosts": {"r1": 5}}}, "devices.hosts"),
+        ({"probes": [{"device": "r1", "interface": "x", "target": "1.1.1.1"}]}, "not in \\[devices.hosts\\]"),
+        ({"probes": [{"device": "r1"}]}, "probes: missing"),
+    ],
+)
+def test_invalid_frr_config(data: dict, message: str) -> None:
+    with pytest.raises(ConfigError, match=message):
+        parse_settings(data)

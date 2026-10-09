@@ -51,3 +51,37 @@ def test_simulate_rehearses_a_policy_change(tmp_path: Path, capsys: pytest.Captu
     assert main(["simulate", "--scenario", "insufficient-capacity", "--config", str(config)]) == 0
     assert "drains: 0, undrains: 0, blocked: 0" in capsys.readouterr().out
     assert main(["simulate", "--config", str(config), "--target", "http://127.0.0.1:1"]) == 2
+
+
+LAB = str(Path(__file__).parent.parent / "lab" / "frr" / "netpulse.toml")
+
+
+def test_collect_streams_samples(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from netpulse import cli, collector
+    from netpulse.models import InterfaceRef
+
+    from .conftest import sample
+
+    monkeypatch.setattr(
+        collector.ProbeCollector, "collect", lambda self: [sample(InterfaceRef("r1", "lnk1"), 0)]
+    )
+    sent = []
+    monkeypatch.setattr(cli.HttpSink, "send", lambda self, samples: sent.append(samples) or [])
+    assert main(["collect", "--config", LAB, "--cycles", "2", "--interval", "0", "--verbose"]) == 0
+    assert len(sent) == 2
+    assert "r1:lnk1 loss=0%" in capsys.readouterr().out
+
+
+def test_collect_survives_errors_and_needs_probes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from netpulse import collector
+    from netpulse.devices import DeviceError
+
+    def broken(self):
+        raise DeviceError("r1: unreachable")
+
+    monkeypatch.setattr(collector.ProbeCollector, "collect", broken)
+    assert main(["collect", "--config", LAB, "--cycles", "1", "--interval", "0"]) == 0
+    assert "unreachable" in capsys.readouterr().err
+    assert main(["collect", "--config", EXAMPLE, "--cycles", "1"]) == 2

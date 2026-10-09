@@ -159,10 +159,23 @@ truth for device state; the engine never assumes a change worked.
 - `LabExecutor`: simulated device with fault injection (`fail_on` raises,
   `ignore_on` silently doesn't take effect). Used by the simulator and tests.
 
-A production adapter would, at minimum: authenticate per device; drain
-gracefully (raise the IGP metric / shut the BGP session, wait for traffic to
-leave, then disable); be idempotent on `change_id`; and read back real state
-for `drained()`.
+- `FrrExecutor` (`frr.py`): real routers. A drain sets `ip ospf cost 65535`
+  on both ends of the link, then polls `show ip route ospf json` until no
+  selected route has a next hop out of that interface. If that doesn't happen
+  within `converge_timeout_s`, or the far end can't be reached, it restores
+  the original cost on every end it touched and raises, so the engine records
+  `failed` and the device is left as it was. `drained()` reads the cost back
+  from each device. Commands go through a `Transport` (`devices.py`):
+  `docker exec` for the lab, SSH for real hosts.
+
+Why cost-out rather than shutting the interface: a costed-out link is still a
+valid path, so if it turns out to be the last one, traffic keeps flowing
+instead of being black-holed. The capacity checks should prevent that case
+anyway; cost-out is the second line of defence.
+
+Today a change runs synchronously under the server lock, so a slow device
+delays telemetry ingestion by up to `converge_timeout_s`. A production
+version would hand changes to a worker and record their progress.
 
 ## State and restarts
 

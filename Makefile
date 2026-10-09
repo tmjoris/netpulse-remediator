@@ -1,4 +1,4 @@
-.PHONY: install lint fmt typecheck test check simulate serve up down e2e
+.PHONY: install lint fmt typecheck test check simulate serve up down e2e frr-lab
 
 PY ?= .venv/bin/python
 BIN := $(dir $(PY))
@@ -35,3 +35,6 @@ down:
 e2e: up             ## drive every scenario through the containerised API
 	$(BIN)netpulse simulate --scenario all --target http://127.0.0.1:8000
 	docker compose exec -T netpulse netpulse audit verify /var/lib/netpulse/netpulse.audit.jsonl
+
+frr-lab:            ## drain/undrain on real FRR routers (needs Docker + sch_netem)
+	NETPULSE=$(BIN)netpulse lab/frr/demo.sh

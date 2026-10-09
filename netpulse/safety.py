@@ -183,8 +183,11 @@ class SafetyChecker:
             return checks
 
         capacity = sum(m.capacity_gbps for m in survivors)
-        projected = traffic_gbps / capacity * 100 if capacity else float("inf")
         limit = self.policy.max_post_drain_utilization_pct
+        if not capacity:
+            checks.append(CheckResult("capacity_headroom", False, "no capacity would remain in the group"))
+            return checks
+        projected = traffic_gbps / capacity * 100
         checks.append(
             CheckResult(
                 "capacity_headroom",

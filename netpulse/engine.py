@@ -164,7 +164,7 @@ class RemediationEngine:
         self._change_seq = replayed.change_seq
         self._incident_seq = replayed.incident_seq
         self._maintenance_seq = replayed.maintenance_seq
-        self.executor = executor or build_executor(self.settings.executor, self.state.drained)
+        self.executor = executor or build_executor(self.settings, self.state.drained)
         self.metrics = metrics or Metrics()
         self.metrics.bind(self)
         self._incidents: OrderedDict[str, Incident] = OrderedDict()

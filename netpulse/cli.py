@@ -1,4 +1,4 @@
-"""Command-line entry point: serve, simulate, demo, check-config, audit."""
+"""Command-line entry point: serve, collect, simulate, demo, check-config, audit."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pathlib import Path
 from . import __version__
 from .audit import AuditError, verify_chain
 from .config import ConfigError, load_settings
+from .executors import ExecutionError
 from .models import to_jsonable, utcnow
 from .safety import human
 from .simulator import SCENARIOS, HttpSink, InProcessSink, format_record, lab_engine, run_scenario
@@ -26,10 +27,53 @@ def cmd_serve(args: argparse.Namespace) -> int:
     logs.configure(args.log_format, args.log_level)
     try:
         app = create_app(load_settings(args.config))
-    except (ConfigError, AuditError) as exc:
+    except (ConfigError, AuditError, ExecutionError) as exc:
         print(f"netpulse: {exc}", file=sys.stderr)
         return 2
     uvicorn.run(app, host=args.host, port=args.port, log_config=None, access_log=args.access_log)
+    return 0
+
+
+def cmd_collect(args: argparse.Namespace) -> int:
+    import time
+    import urllib.error
+
+    from .collector import ProbeCollector
+    from .devices import DeviceError, SubprocessTransport
+
+    try:
+        settings = load_settings(args.config)
+    except ConfigError as exc:
+        print(f"netpulse: {exc}", file=sys.stderr)
+        return 2
+    if not settings.probes:
+        print("netpulse: no [[probes]] configured", file=sys.stderr)
+        return 2
+    collector = ProbeCollector(SubprocessTransport(settings.devices), settings.probes, settings.topology)
+    sink = HttpSink(args.target, args.token or os.environ.get("NETPULSE_API_TOKEN"))
+    start, cycle = utcnow(), 0
+    print(f"probing {len(settings.probes)} link(s) every {args.interval:g}s -> {args.target}", flush=True)
+    while args.cycles is None or cycle < args.cycles:
+        cycle += 1
+        began = time.monotonic()
+        try:
+            samples = collector.collect()
+            records = sink.send(samples)
+        except (DeviceError, ValueError, OSError, urllib.error.URLError) as exc:
+            # A collector must keep running through device or API hiccups.
+            print(f"cycle {cycle}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        else:
+            if args.verbose:
+                for s in samples:
+                    print(
+                        f"  {s.device}:{s.interface} loss={s.packet_loss_pct:g}% "
+                        f"rtt={s.latency_ms:g}ms util={s.utilization_pct:g}%",
+                        flush=True,
+                    )
+            for record in records:
+                for line in format_record(record, start):
+                    print(line, flush=True)
+        time.sleep(max(0.0, args.interval - (time.monotonic() - began)))
     return 0
 
 
@@ -127,6 +171,17 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--log-level", default="INFO")
     serve.add_argument("--access-log", action="store_true", help="log every HTTP request")
     serve.set_defaults(func=cmd_serve)
+
+    collect = sub.add_parser("collect", help="probe configured links and stream telemetry to a server")
+    collect.add_argument(
+        "--config", help="TOML config with [devices] and [[probes]] (default: $NETPULSE_CONFIG)"
+    )
+    collect.add_argument("--target", default="http://127.0.0.1:8000", help="NetPulse base URL")
+    collect.add_argument("--token", help="API token (default: $NETPULSE_API_TOKEN)")
+    collect.add_argument("--interval", type=float, default=2.0, help="seconds between probe cycles")
+    collect.add_argument("--cycles", type=int, help="stop after this many cycles (default: run forever)")
+    collect.add_argument("--verbose", action="store_true", help="print every sample")
+    collect.set_defaults(func=cmd_collect)
 
     simulate = sub.add_parser("simulate", help="run a failure scenario against the engine or a live server")
     simulate.add_argument("--scenario", choices=[*SCENARIOS, "all"], default="all")

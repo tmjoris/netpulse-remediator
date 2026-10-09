@@ -65,7 +65,35 @@ class SafetyPolicy:
             raise ConfigError("safety.flap_max_drains must be at least 1")
 
 
-EXECUTOR_MODES = ("dry_run", "lab")
+EXECUTOR_MODES = ("dry_run", "lab", "frr")
+TRANSPORTS = ("docker", "ssh")
+
+
+@dataclass(frozen=True)
+class DeviceAccess:
+    """How to run commands on devices: shared by the FRR executor and the probe collector."""
+
+    transport: str = "docker"  # "docker": docker exec <host>; "ssh": ssh [user@]<host>
+    hosts: dict[str, str] = field(default_factory=dict)  # device name -> container or SSH host
+    ssh_user: str | None = None
+    command_timeout_s: float = 10.0
+
+
+@dataclass(frozen=True)
+class FrrOptions:
+    drain_cost: int = 65535  # OSPF cost used to drain (cost-out) an interface
+    normal_cost: int = 10  # cost restored on undrain; production would read it from the source of truth
+    converge_timeout_s: float = 15.0  # how long to wait for routes to leave a drained interface
+    # Drains are bidirectional: draining r1:lnk1 also costs out the far end, r2:lnk1.
+    peers: dict[InterfaceRef, InterfaceRef] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProbeSpec:
+    """Active probe for one link: ping ``target`` (the far end) out of ``interface``."""
+
+    ref: InterfaceRef
+    target: str
 
 
 @dataclass(frozen=True)
@@ -74,6 +102,9 @@ class Settings:
     safety: SafetyPolicy = field(default_factory=SafetyPolicy)
     topology: Topology = field(default_factory=Topology)
     executor: str = "dry_run"
+    devices: DeviceAccess = field(default_factory=DeviceAccess)
+    frr: FrrOptions = field(default_factory=FrrOptions)
+    probes: tuple[ProbeSpec, ...] = ()
     audit_path: Path = Path("runtime/netpulse.audit.jsonl")
     api_token: str | None = None
     source: str = "<defaults>"
@@ -83,6 +114,15 @@ class Settings:
         self.safety.validate()
         if self.executor not in EXECUTOR_MODES:
             raise ConfigError(f"executor.mode must be one of {EXECUTOR_MODES}")
+        if self.devices.transport not in TRANSPORTS:
+            raise ConfigError(f"devices.transport must be one of {TRANSPORTS}")
+        if self.executor == "frr" and not self.devices.hosts:
+            raise ConfigError("executor.mode = 'frr' needs [devices.hosts]")
+        if not 0 < self.frr.normal_cost < self.frr.drain_cost <= 65535:
+            raise ConfigError("executor.frr: require 0 < normal_cost < drain_cost <= 65535")
+        for spec in self.probes:
+            if spec.ref.device not in self.devices.hosts:
+                raise ConfigError(f"probe {spec.ref}: device {spec.ref.device!r} not in [devices.hosts]")
         return self
 
 
@@ -145,16 +185,52 @@ def _topology(groups: list[dict[str, Any]]) -> Topology:
         raise ConfigError(str(exc)) from exc
 
 
+def _refs(table: dict[str, Any], name: str) -> dict[InterfaceRef, InterfaceRef]:
+    try:
+        return {InterfaceRef.parse(k): InterfaceRef.parse(v) for k, v in table.items()}
+    except (ValueError, AttributeError) as exc:
+        raise ConfigError(f"{name}: {exc}") from exc
+
+
+def _devices(section: dict[str, Any]) -> DeviceAccess:
+    section = dict(section)
+    hosts = section.pop("hosts", {})
+    if not isinstance(hosts, dict) or not all(isinstance(v, str) for v in hosts.values()):
+        raise ConfigError("devices.hosts must map device names to strings")
+    access: DeviceAccess = _build(DeviceAccess, section, "devices")
+    return replace(access, hosts=dict(hosts))
+
+
+def _frr(section: dict[str, Any]) -> FrrOptions:
+    section = dict(section)
+    peers = _refs(section.pop("peers", {}), "executor.frr.peers")
+    options: FrrOptions = _build(FrrOptions, section, "executor.frr")
+    return replace(options, peers=peers)
+
+
+def _probes(entries: list[dict[str, Any]]) -> tuple[ProbeSpec, ...]:
+    try:
+        return tuple(ProbeSpec(InterfaceRef(e["device"], e["interface"]), str(e["target"])) for e in entries)
+    except (KeyError, TypeError) as exc:
+        raise ConfigError(f"probes: missing or invalid field {exc}") from exc
+
+
 def parse_settings(data: dict[str, Any], source: str = "<inline>") -> Settings:
-    known = {"detection", "safety", "executor", "audit", "api", "link_groups"}
+    known = {"detection", "safety", "executor", "audit", "api", "link_groups", "devices", "probes"}
     unknown = set(data) - known
     if unknown:
         raise ConfigError(f"unknown top-level section(s): {', '.join(sorted(unknown))}")
+    unknown_executor = set(data.get("executor", {})) - {"mode", "frr"}
+    if unknown_executor:
+        raise ConfigError(f"unknown key(s) in executor: {', '.join(sorted(unknown_executor))}")
     settings = Settings(
         detection=_build(DetectionPolicy, data.get("detection", {}), "detection"),
         safety=_build(SafetyPolicy, data.get("safety", {}), "safety", _SAFETY_DURATIONS),
         topology=_topology(data.get("link_groups", [])),
         executor=data.get("executor", {}).get("mode", "dry_run"),
+        devices=_devices(data.get("devices", {})),
+        frr=_frr(data.get("executor", {}).get("frr", {})),
+        probes=_probes(data.get("probes", [])),
         audit_path=Path(data.get("audit", {}).get("path", "runtime/netpulse.audit.jsonl")),
         api_token=data.get("api", {}).get("token"),
         source=source,
